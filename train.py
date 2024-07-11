@@ -53,7 +53,7 @@ def main(config):
         train_set,
         config["train"]["n_episode"],
         collate_fn=datasets.collate_fn,
-        num_workers=1,
+        num_workers=config["custom"]["num_workers"],
         pin_memory=True,
     )
 
@@ -71,7 +71,7 @@ def main(config):
             val_set,
             config["val"]["n_episode"],
             collate_fn=datasets.collate_fn,
-            num_workers=1,
+            num_workers=config["custom"]["num_workers"],
             pin_memory=True,
         )
 
@@ -136,8 +136,9 @@ def main(config):
 
         for data in tqdm(train_loader, desc="meta-train", leave=False):
             x_shot, x_query, y_shot, y_query = data
-            x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
-            x_query, y_query = x_query.cuda(), y_query.cuda()
+            if config["custom"]["device"] != "cpu":
+                x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
+                x_query, y_query = x_query.cuda(), y_query.cuda()
 
             if inner_args["reset_classifier"]:
                 if config.get("_parallel"):
@@ -168,8 +169,9 @@ def main(config):
 
             for data in tqdm(val_loader, desc="meta-val", leave=False):
                 x_shot, x_query, y_shot, y_query = data
-                x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
-                x_query, y_query = x_query.cuda(), y_query.cuda()
+                if config["custom"]["device"] != "cpu":
+                    x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
+                    x_query, y_query = x_query.cuda(), y_query.cuda()
 
                 if inner_args["reset_classifier"]:
                     if config.get("_parallel"):
