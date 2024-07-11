@@ -23,7 +23,9 @@ class MiniImageNet(Dataset):
             "meta-val": "val",  # meta-val
             "meta-test": "test",  # meta-test
         }
-        split_tag = split_dict[split]
+
+        # Adapting to original dataset file name
+        split_tag = "miniImageNet_category_split_" + split_dict[split]
 
         split_file = os.path.join(root_path, split_tag + ".pickle")
         assert os.path.isfile(split_file)
