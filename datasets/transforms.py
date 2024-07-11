@@ -53,6 +53,13 @@ def get_transform(name, image_size, norm_params):
                 transforms.Normalize(**norm_params),
             ]
         )
+    elif name == "sound":
+        return transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(**norm_params),
+            ]
+        )
     elif name is None:
         return transforms.Compose(
             [

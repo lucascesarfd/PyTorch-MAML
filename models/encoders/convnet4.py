@@ -28,7 +28,7 @@ class ConvBlock(Module):
 
 
 class ConvNet4(Module):
-    def __init__(self, hid_dim, out_dim, bn_args):
+    def __init__(self, channels, hid_dim, out_dim, bn_args):
         super(ConvNet4, self).__init__()
         self.hid_dim = hid_dim
         self.out_dim = out_dim
@@ -47,7 +47,7 @@ class ConvNet4(Module):
         self.encoder = Sequential(
             OrderedDict(
                 [
-                    ("conv1", ConvBlock(3, hid_dim, bn_args_dict[1])),
+                    ("conv1", ConvBlock(channels, hid_dim, bn_args_dict[1])),
                     ("conv2", ConvBlock(hid_dim, hid_dim, bn_args_dict[2])),
                     ("conv3", ConvBlock(hid_dim, hid_dim, bn_args_dict[3])),
                     ("conv4", ConvBlock(hid_dim, out_dim, bn_args_dict[4])),
@@ -56,7 +56,8 @@ class ConvNet4(Module):
         )
 
     def get_out_dim(self, scale=25):
-        return self.out_dim * scale
+        #return self.out_dim * scale
+        return 2048
 
     def forward(self, x, params=None, episode=None):
         out = self.encoder(x, get_child_dict(params, "encoder"), episode)
@@ -66,9 +67,12 @@ class ConvNet4(Module):
 
 @register("convnet4")
 def convnet4(bn_args=dict()):
-    return ConvNet4(32, 32, bn_args)
+    return ConvNet4(3, 32, 32, bn_args)
 
+@register("mono_convnet4")
+def convnet4(bn_args=dict()):
+    return ConvNet4(1, 32, 32, bn_args)
 
 @register("wide-convnet4")
 def wide_convnet4(bn_args=dict()):
-    return ConvNet4(64, 64, bn_args)
+    return ConvNet4(3, 64, 64, bn_args)

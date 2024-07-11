@@ -1,4 +1,5 @@
 from .datasets import make, collate_fn
+from . import mini_vggsound
 from . import mini_imagenet
 from . import tiered_imagenet
 from . import cifar100

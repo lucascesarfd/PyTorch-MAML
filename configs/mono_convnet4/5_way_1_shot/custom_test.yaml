@@ -1,0 +1,26 @@
+dataset: meta-mini-vggsound
+test:
+  split: vtuad-test
+  normalization: False
+  transform: sound
+  n_batch: 150
+  n_episode: 4
+  n_way: 5
+  n_shot: 1
+  n_query: 1
+  root_path: "C:\\Users\\cesa0007\\Documents\\Project\\datasets\\vtuad"
+
+load: "C:\\Users\\cesa0007\\Documents\\Project\\PyTorch-MAML\\save\\mono_convnet4_mini-vggsound_5_way_1_shot\\max-va.pth"
+
+inner_args:
+  n_step: 10
+  encoder_lr: 0.01
+  classifier_lr: 0.01
+  first_order: False  # set to True for FOMAML
+  frozen:
+    - bn
+
+epoch: 1
+custom:
+  num_workers: 0
+  device: "cpu"
