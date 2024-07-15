@@ -1,3 +1,4 @@
+import math
 from collections import OrderedDict
 
 import torch.nn as nn
@@ -28,10 +29,11 @@ class ConvBlock(Module):
 
 
 class ConvNet4(Module):
-    def __init__(self, channels, hid_dim, out_dim, bn_args):
+    def __init__(self, channels, hid_dim, out_dim, bn_args, in_dim):
         super(ConvNet4, self).__init__()
         self.hid_dim = hid_dim
         self.out_dim = out_dim
+        self.img_dim = in_dim
 
         episodic = bn_args.get("episodic") or []
         bn_args_ep, bn_args_no_ep = bn_args.copy(), bn_args.copy()
@@ -55,9 +57,8 @@ class ConvNet4(Module):
             )
         )
 
-    def get_out_dim(self, scale=25):
-        #return self.out_dim * scale
-        return 2048
+    def get_out_dim(self):
+        return self.out_dim * math.floor(self.img_dim[0] / 2**4) * math.floor(self.img_dim[1] / 2**4)
 
     def forward(self, x, params=None, episode=None):
         out = self.encoder(x, get_child_dict(params, "encoder"), episode)
@@ -66,13 +67,10 @@ class ConvNet4(Module):
 
 
 @register("convnet4")
-def convnet4(bn_args=dict()):
-    return ConvNet4(3, 32, 32, bn_args)
+def convnet4(bn_args=dict(), in_dims=[84, 84], channels=3):
+    return ConvNet4(channels, 32, 32, bn_args, in_dims)
 
-@register("mono_convnet4")
-def convnet4(bn_args=dict()):
-    return ConvNet4(1, 32, 32, bn_args)
 
 @register("wide-convnet4")
-def wide_convnet4(bn_args=dict()):
-    return ConvNet4(3, 64, 64, bn_args)
+def wide_convnet4(bn_args=dict(), in_dims=[84, 84], channels=3):
+    return ConvNet4(channels, 64, 64, bn_args, in_dims)

@@ -9,14 +9,14 @@ from .datasets import register
 from .transforms import get_transform
 
 
-@register("mini-vggsound")
+@register("mini-sound")
 class MiniVGGSound(Dataset):
     def __init__(self, root_path, split="train", image_size=(128, 130), normalization=True, transform="sound"):
         super(MiniVGGSound, self).__init__()
         split_dict = {
-            "train": "mini-vggsound-train",
-            "val": "mini-vggsound-val",
-            "vtuad-test": "mini-vtuad-test",
+            "vggsound-train": "miniVGGsound_1s_100spc_train",
+            "vggsound-val": "miniVGGsound_1s_100spc_val",
+            "vtuad-test": "miniVTUAD_1s_2k4k_test",
         }
 
         split_tag = split_dict[split]
@@ -60,7 +60,7 @@ class MiniVGGSound(Dataset):
         return image, label
 
 
-@register("meta-mini-vggsound")
+@register("meta-mini-sound")
 class MetaMiniVGGSound(MiniVGGSound):
     def __init__(
         self,

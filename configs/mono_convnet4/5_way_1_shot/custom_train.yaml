@@ -1,6 +1,7 @@
-dataset: meta-mini-vggsound
+dataset: meta-mini-sound
+
 train:
-  split: train
+  split: vggsound-train
   normalization: False
   transform: sound
   n_batch: 200
@@ -8,9 +9,10 @@ train:
   n_way: 5
   n_shot: 1
   n_query: 15
-  root_path: "C:\\Users\\cesa0007\\Downloads\\vggsound"
+  root_path: "C:\\Users\\cesa0007\\Documents\\Project\\datasets\\datasets_dev\\vggsound"
+
 val:
-  split: val
+  split: vggsound-val
   normalization: False
   transform: sound
   n_batch: 200
@@ -18,10 +20,10 @@ val:
   n_way: 5
   n_shot: 1
   n_query: 15
-  root_path: "C:\\Users\\cesa0007\\Downloads\\vggsound"
+  root_path: "C:\\Users\\cesa0007\\Documents\\Project\\datasets\\datasets_dev\\vggsound"
 
 
-encoder: mono_convnet4
+encoder: convnet4
 encoder_args:
   bn_args:
     track_running_stats: False

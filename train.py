@@ -44,6 +44,8 @@ def main(config):
 
     # meta-train
     train_set = datasets.make(config["dataset"], **config["train"])
+    data_channels = train_set[0][0].shape[1]
+    data_in_dims = (train_set[0][0].shape[2], train_set[0][0].shape[3])
     utils.log(
         "meta-train set: {} (x{}), {}".format(
             train_set[0][0].shape, len(train_set), train_set.n_classes
@@ -90,8 +92,10 @@ def main(config):
         max_va = ckpt["training"]["max_va"]
     else:
         config["encoder_args"] = config.get("encoder_args") or dict()
-        config["classifier_args"] = config.get("classifier_args") or dict()
         config["encoder_args"]["bn_args"]["n_episode"] = config["train"]["n_episode"]
+        config["encoder_args"]["in_dims"] = data_in_dims
+        config["encoder_args"]["channels"] = data_channels
+        config["classifier_args"] = config.get("classifier_args") or dict()
         config["classifier_args"]["n_way"] = config["train"]["n_way"]
         model = models.make(
             config["encoder"],
