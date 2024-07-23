@@ -1,16 +1,17 @@
 import argparse
 import os
 import random
-from collections import OrderedDict
+import sys
 
+import git
+import mlflow
 import yaml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from tqdm import tqdm
+from tqdm import tqdm 
 from torch.utils.data import DataLoader
-from tensorboardX import SummaryWriter
 
 import datasets
 import models
@@ -18,27 +19,49 @@ import utils
 import utils.optimizers as optimizers
 
 
+def create_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="configuration file")
+    parser.add_argument("--log_dir", help="the log directory", type=str, default="./save")
+    parser.add_argument("--gpu", help="gpu device number", type=str, default="0")
+    parser.add_argument("--efficient", help="if True, enables gradient checkpointing", action="store_true")
+    args = parser.parse_args()
+    return args
+
+
 def main(config):
+    # Set random seeds
     random.seed(0)
     np.random.seed(0)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
 
-    ckpt_name = args.name
-    if ckpt_name is None:
-        ckpt_name = config["encoder"]
-        ckpt_name += "_" + config["dataset"].replace("meta-", "")
-        ckpt_name += "_{}_way_{}_shot".format(config["train"]["n_way"], config["train"]["n_shot"])
-    if args.tag is not None:
-        ckpt_name += "_" + args.tag
+    ##### MLFLOW #####
 
-    ckpt_path = os.path.join("./save", ckpt_name)
+    # set mlflow tracking folder
+    mlflow.set_tracking_uri(config["mlflow"]["uri"])
+
+    # set experiment name
+    mlflow.set_experiment(config["mlflow"]["exp_name"])
+
+    # if a run with the parameter run_id exists, log to that experiment
+    ml_run = mlflow.start_run(run_id=config["mlflow"]["run_id"], run_name=config["mlflow"]["run_name"])
+
+    # register git commit for experiment reproducibility
+    if config["mlflow"]["git_repo"]:
+        git_repo = git.Repo(config["mlflow"]["git_repo"])
+        mlflow.set_tag('branch',
+                    None if git_repo.head.is_detached else git_repo.active_branch.name)
+        mlflow.set_tag('commit', git_repo.head.commit)
+    
+    # register full bash command as tags
+    mlflow.set_tag('full_command', ' '.join(sys.argv))
+
+    # Deal with logs dir
+    mlflow.log_artifact(os.path.abspath(args.config))
+    
+    ckpt_path = os.path.join(args.log_dir, f'{config["mlflow"]["exp_name"]}', ml_run.info.run_id)
     utils.ensure_path(ckpt_path)
-    utils.set_log_path(ckpt_path)
-    writer = SummaryWriter(os.path.join(ckpt_path, "tensorboard"))
-    yaml.dump(config, open(os.path.join(ckpt_path, "config.yaml"), "w"))
 
     ##### Dataset #####
 
@@ -46,11 +69,13 @@ def main(config):
     train_set = datasets.make(config["dataset"], **config["train"])
     data_channels = train_set[0][0].shape[1]
     data_in_dims = (train_set[0][0].shape[2], train_set[0][0].shape[3])
-    utils.log(
-        "meta-train set: {} (x{}), {}".format(
-            train_set[0][0].shape, len(train_set), train_set.n_classes
-        )
-    )
+    params = {
+        'train-shape': tuple(train_set[0][0].shape),
+        'train-len': len(train_set),
+        "train-classes": train_set.n_classes,
+        }
+    mlflow.log_params(params)
+    print(f"Meta-Train set:\n\tshape: {tuple(train_set[0][0].shape)}\n\tlength: {len(train_set)}\n\tclasses: {train_set.n_classes}")
     train_loader = DataLoader(
         train_set,
         config["train"]["n_episode"],
@@ -64,11 +89,13 @@ def main(config):
     if config.get("val"):
         eval_val = True
         val_set = datasets.make(config["dataset"], **config["val"])
-        utils.log(
-            "meta-val set: {} (x{}), {}".format(
-                val_set[0][0].shape, len(val_set), val_set.n_classes
-            )
-        )
+        params = {
+            'val-shape': tuple(val_set[0][0].shape),
+            'val-len': len(val_set),
+            "val-classes": val_set.n_classes,
+            }
+        mlflow.log_params(params)
+        print(f"Meta-Val set:\n\tshape: {tuple(val_set[0][0].shape)}\n\tlength: {len(val_set)}\n\tclasses: {val_set.n_classes}")
         val_loader = DataLoader(
             val_set,
             config["val"]["n_episode"],
@@ -115,7 +142,8 @@ def main(config):
     if config.get("_parallel"):
         model = nn.DataParallel(model)
 
-    utils.log("num params: {}".format(utils.compute_n_params(model)))
+    mlflow.log_param('num_params', utils.compute_n_params(model))
+    print(f"Number of Parameters: {utils.compute_n_params(model)}")
     timer_elapsed, timer_epoch = utils.Timer(), utils.Timer()
 
     ##### Training and evaluation #####
@@ -129,16 +157,23 @@ def main(config):
     for k in aves_keys:
         trlog[k] = []
 
-    for epoch in range(start_epoch, config["epoch"] + 1):
+    pbar = tqdm(
+        range(start_epoch, config["epoch"] + 1),
+        desc=f'Epoch',
+        leave=False,
+        bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}"
+    )
+
+    for epoch in pbar:
         timer_epoch.start()
         aves = {k: utils.AverageMeter() for k in aves_keys}
 
         # meta-train
         model.train()
-        writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
+        mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=epoch)
         np.random.seed(epoch)
 
-        for data in tqdm(train_loader, desc="meta-train", leave=False):
+        for data in tqdm(train_loader, desc="Meta-Train", leave=False, bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}"):
             x_shot, x_query, y_shot, y_query = data
             if config["custom"]["device"] != "cpu":
                 x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
@@ -171,7 +206,7 @@ def main(config):
             model.eval()
             np.random.seed(0)
 
-            for data in tqdm(val_loader, desc="meta-val", leave=False):
+            for data in tqdm(val_loader, desc="Meta-Val", leave=False, bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}"):
                 x_shot, x_query, y_shot, y_query = data
                 if config["custom"]["device"] != "cpu":
                     x_shot, y_shot = x_shot.cuda(), y_shot.cuda()
@@ -200,24 +235,26 @@ def main(config):
             aves[k] = avg.item()
             trlog[k].append(aves[k])
 
-        t_epoch = utils.time_str(timer_epoch.end())
-        t_elapsed = utils.time_str(timer_elapsed.end())
-        t_estimate = utils.time_str(
-            timer_elapsed.end() / (epoch - start_epoch + 1) * (config["epoch"] - start_epoch + 1)
-        )
+        total_elapsed = timer_elapsed.end()
+        total_estimate = total_elapsed / (epoch - start_epoch + 1) * (config["epoch"] - start_epoch + 1)
+        estimate_time = total_estimate - total_elapsed
 
         # formats output
-        log_str = "epoch {}, meta-train {:.4f}|{:.4f}".format(str(epoch), aves["tl"], aves["ta"])
-        writer.add_scalars("loss", {"meta-train": aves["tl"]}, epoch)
-        writer.add_scalars("acc", {"meta-train": aves["ta"]}, epoch)
+        metrics = {"loss-meta-train": aves["tl"], 'acc-meta-train': aves["ta"]}
+        mlflow.log_metrics(metrics, step=epoch)
 
         if eval_val:
-            log_str += ", meta-val {:.4f}|{:.4f}".format(aves["vl"], aves["va"])
-            writer.add_scalars("loss", {"meta-val": aves["vl"]}, epoch)
-            writer.add_scalars("acc", {"meta-val": aves["va"]}, epoch)
+            metrics = {"loss-meta-val": aves["vl"], 'acc-meta-val': aves["va"]}
+            mlflow.log_metrics(metrics, step=epoch)
 
-        log_str += ", {} {}/{}".format(t_epoch, t_elapsed, t_estimate)
-        utils.log(log_str)
+        pbar.set_postfix(
+            tr_loss=f'{aves["tl"]:.4f}',
+            tr_acc=f'{aves["ta"]:.4f}',
+            va_loss=f'{aves["vl"]:.4f}',
+            va_acc=f'{aves["va"]:.4f}',
+        )
+        metrics = {"estimate_hour": estimate_time/3600, "epoch": epoch}
+        mlflow.log_metrics(metrics, step=epoch)
 
         # saves model and meta-data
         if config.get("_parallel"):
@@ -247,30 +284,27 @@ def main(config):
             "training": training,
         }
 
-        # 'epoch-last.pth': saved at the latest epoch
-        # 'max-va.pth': saved when validation accuracy is at its maximum
-        torch.save(ckpt, os.path.join(ckpt_path, "epoch-last.pth"))
-        torch.save(trlog, os.path.join(ckpt_path, "trlog.pth"))
+        # 'last.pth': saved at the latest epoch
+        # 'best.pth': saved when validation accuracy is at its maximum
+        last_path = os.path.join(ckpt_path, "last.pth")
+        trlog_path = os.path.join(ckpt_path, "trlog.pth")
+        torch.save(ckpt, last_path)
+        torch.save(trlog, trlog_path)
+        mlflow.log_artifact(os.path.abspath(last_path), artifact_path="model")
+        mlflow.log_artifact(os.path.abspath(trlog_path), artifact_path="model")
 
         if aves["va"] > max_va:
             max_va = aves["va"]
-            torch.save(ckpt, os.path.join(ckpt_path, "max-va.pth"))
-
-        writer.flush()
+            best_path = os.path.join(ckpt_path, "best.pth")
+            torch.save(ckpt, best_path)
+            mlflow.log_artifact(os.path.abspath(best_path), artifact_path="model")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", help="configuration file")
-    parser.add_argument("--name", help="model name", type=str, default=None)
-    parser.add_argument("--tag", help="auxiliary information", type=str, default=None)
-    parser.add_argument("--gpu", help="gpu device number", type=str, default="0")
-    parser.add_argument(
-        "--efficient", help="if True, enables gradient checkpointing", action="store_true"
-    )
-    args = parser.parse_args()
+    args = create_args()
     config = yaml.load(open(args.config, "r"), Loader=yaml.FullLoader)
 
+    # Deal with multiple GPU's
     if len(args.gpu.split(",")) > 1:
         config["_parallel"] = True
         config["_gpu"] = args.gpu

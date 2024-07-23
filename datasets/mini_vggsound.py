@@ -13,14 +13,8 @@ from .transforms import get_transform
 class MiniVGGSound(Dataset):
     def __init__(self, root_path, split="train", image_size=(128, 130), normalization=True, transform="sound"):
         super(MiniVGGSound, self).__init__()
-        split_dict = {
-            "vggsound-train": "miniVGGsound_1s_100spc_train",
-            "vggsound-val": "miniVGGsound_1s_100spc_val",
-            "vtuad-test": "miniVTUAD_1s_2k4k_test",
-        }
 
-        split_tag = split_dict[split]
-        split_file = os.path.join(root_path, split_tag + ".pickle")
+        split_file = os.path.join(root_path, split + ".pickle")
         assert os.path.isfile(split_file)
         with open(split_file, "rb") as f:
             pack = pickle.load(f, encoding="latin1")
@@ -33,7 +27,7 @@ class MiniVGGSound(Dataset):
         new_label = np.array([label_map[x] for x in label])
 
         self.root_path = root_path
-        self.split_tag = split_tag
+        self.split_tag = split
         self.image_size = image_size
 
         self.data = data
@@ -88,7 +82,7 @@ class MetaMiniVGGSound(MiniVGGSound):
         self.catlocs = tuple()
         for cat in range(self.n_classes):
             self.catlocs += (np.argwhere(self.label == cat).reshape(-1),)
-
+        
         self.val_transform = get_transform(val_transform, image_size, self.norm_params)
 
     def __len__(self):
