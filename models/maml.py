@@ -127,7 +127,121 @@ class MAML(Module):
 
         return updated_params, mom_buffer
 
-    def _adapt(self, x, y, params, episode, inner_args, meta_train):
+    def _adapt(self, x, y, xq, params, episode, inner_args, meta_train):
+        """
+        Performs inner-loop adaptation in MAML.
+
+        Args:
+          x (float tensor, [n_way * n_shot, C, H, W]): per-episode support set.
+            (T: transforms, C: channels, H: height, W: width)
+          y (int tensor, [n_way * n_shot]): per-episode support set labels.
+          params (dict): a dictionary of parameters at meta-initialization.
+          episode (int): the current episode index.
+          inner_args (dict): inner-loop optimization hyperparameters.
+          meta_train (bool): if True, the model is in meta-training.
+
+        Returns:
+          params (dict): model paramters AFTER inner-loop adaptation.
+        """
+        assert x.dim() == 4 and y.dim() == 1
+        assert x.size(0) == y.size(0)
+
+        # Initializes a dictionary of momentum buffer for gradient descent in the
+        # inner loop. It has the same set of keys as the parameter dictionary.
+        mom_buffer = OrderedDict()
+        if inner_args["momentum"] > 0:
+            for name, param in params.items():
+                mom_buffer[name] = torch.zeros_like(param)
+        params_keys = tuple(params.keys())
+        mom_buffer_keys = tuple(mom_buffer.keys())
+
+        for m in self.modules():
+            if isinstance(m, BatchNorm2d) and m.is_episodic():
+                m.reset_episodic_running_stats(episode)
+
+        def _inner_iter_cp(episode, *state):
+            """
+            Performs one inner-loop iteration when checkpointing is enabled.
+            The code is executed twice:
+              - 1st time with torch.no_grad() for creating checkpoints.
+              - 2nd time with torch.enable_grad() for computing gradients.
+            """
+            params = OrderedDict(zip(params_keys, state[: len(params_keys)]))
+            mom_buffer = OrderedDict(zip(mom_buffer_keys, state[-len(mom_buffer_keys) :]))
+
+            detach = not torch.is_grad_enabled()  # detach graph in the first pass
+            self.is_first_pass(detach)
+            params, mom_buffer = self._inner_iter(
+                x, y, params, mom_buffer, int(episode), inner_args, detach
+            )
+            state = tuple(
+                t if t.requires_grad else t.clone().requires_grad_(True)
+                for t in tuple(params.values()) + tuple(mom_buffer.values())
+            )
+            return state
+
+        logits = []
+        for step in range(inner_args["n_step"]):
+            if self.efficient:  # checkpointing
+                state = tuple(params.values()) + tuple(mom_buffer.values())
+                state = cp.checkpoint(_inner_iter_cp, torch.as_tensor(episode), *state, use_reentrant=False)
+                params = OrderedDict(zip(params_keys, state[: len(params_keys)]))
+                mom_buffer = OrderedDict(zip(mom_buffer_keys, state[-len(mom_buffer_keys) :]))
+            else:
+                params, mom_buffer = self._inner_iter(
+                    x, y, params, mom_buffer, episode, inner_args, not meta_train
+                )
+
+            # inner-loop validation
+            with torch.set_grad_enabled(meta_train):
+                self.eval()
+                logits_ep = self._inner_forward(xq, params, episode)
+            logits.append(logits_ep)
+        logits = torch.stack(logits)
+        return logits
+
+    def forward(self, x_shot, x_query, y_shot, inner_args, meta_train):
+        """
+        Args:
+          x_shot (float tensor, [n_episode, n_way * n_shot, C, H, W]): support sets.
+          x_query (float tensor, [n_episode, n_way * n_query, C, H, W]): query sets.
+            (T: transforms, C: channels, H: height, W: width)
+          y_shot (int tensor, [n_episode, n_way * n_shot]): support set labels.
+          inner_args (dict, optional): inner-loop hyperparameters.
+          meta_train (bool): if True, the model is in meta-training.
+
+        Returns:
+          logits (float tensor, [n_episode, n_way * n_shot, n_way]): predicted logits.
+        """
+        assert self.encoder is not None
+        assert self.classifier is not None
+        assert x_shot.dim() == 5 and x_query.dim() == 5
+        assert x_shot.size(0) == x_query.size(0)
+
+        # a dictionary of parameters that will be updated in the inner loop
+        params = OrderedDict(self.named_parameters())
+        for name in list(params.keys()):
+            if not params[name].requires_grad or any(
+                s in name for s in inner_args["frozen"] + ["temp"]
+            ):
+                params.pop(name)
+
+        logits = []
+        for ep in range(x_shot.size(0)):
+            # inner-loop training and validation
+            self.train()
+            if not meta_train:
+                for m in self.modules():
+                    if isinstance(m, BatchNorm2d) and not m.is_episodic():
+                        m.eval()
+            logits_ep = self._adapt(x_shot[ep], y_shot[ep], x_query[ep], params, ep, inner_args, meta_train)
+            logits.append(logits_ep)
+
+        self.train(meta_train)
+        logits = torch.stack(logits)
+        return logits
+
+    def _original_adapt(self, x, y, params, episode, inner_args, meta_train):
         """
         Performs inner-loop adaptation in MAML.
 
@@ -183,7 +297,7 @@ class MAML(Module):
         for step in range(inner_args["n_step"]):
             if self.efficient:  # checkpointing
                 state = tuple(params.values()) + tuple(mom_buffer.values())
-                state = cp.checkpoint(_inner_iter_cp, torch.as_tensor(episode), *state)
+                state = cp.checkpoint(_inner_iter_cp, torch.as_tensor(episode), *state, use_reentrant=False)
                 params = OrderedDict(zip(params_keys, state[: len(params_keys)]))
                 mom_buffer = OrderedDict(zip(mom_buffer_keys, state[-len(mom_buffer_keys) :]))
             else:
@@ -193,7 +307,7 @@ class MAML(Module):
 
         return params
 
-    def forward(self, x_shot, x_query, y_shot, inner_args, meta_train):
+    def original_forward(self, x_shot, x_query, y_shot, inner_args, meta_train):
         """
         Args:
           x_shot (float tensor, [n_episode, n_way * n_shot, C, H, W]): support sets.
